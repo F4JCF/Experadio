@@ -8,11 +8,13 @@ POTA, SOTA, WWFF, IOTA et Bunkers on the Air (BOTA).
 - **Rien à installer** : on ouvre un lien, c'est tout.
 - **Vos données restent sur votre appareil** : aucun compte, aucune donnée envoyée.
 
+**Ouvrir l'application : https://f4jcf.github.io/Experadio/**
+
 Auteur : F4JCF — Licence GPL v3.
 
 ## Utilisation
 
-1. Ouvrez l'adresse de l'application dans Chrome ou Edge.
+1. Ouvrez https://f4jcf.github.io/Experadio/ dans Chrome ou Edge.
 2. Dans **Réglages** (roue dentée), indiquez votre indicatif et votre locator.
 3. **Nouvelle activation** : cochez les programmes de la sortie (une même sortie peut compter pour POTA, SOTA et WWFF à la fois) et saisissez leurs références.
 4. Sur le terrain, saisissez vos QSO. Le pays et le drapeau du correspondant s'affichent tout seuls, les doublons sont signalés, et une barre par programme montre où vous en êtes.
