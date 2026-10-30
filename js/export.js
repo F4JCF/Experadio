@@ -4,7 +4,7 @@ import { MODES, DIGITAL, normalizeGrid, parseFreq } from './radio.js';
 import { normalizeRef, parseTheirRefs, PROGRAMS } from './programs.js';
 
 export const APP_NAME = 'ExpeRadio';
-export const APP_VERSION = '0.1.0';
+export const APP_VERSION = '0.2.0';
 
 // L'ADIF .adi est en ASCII : on retire les accents et les caractères non pris en charge
 export function asciiOnly(s) {
@@ -61,6 +61,9 @@ function record(q, activation, settings, program) {
   r += field('MY_GRIDSQUARE', normalizeGrid(activation.myGrid || settings?.myGrid));
   r += field('GRIDSQUARE', normalizeGrid(q.grid));
   if (info?.dxcc) r += field('DXCC', String(info.dxcc));
+  r += field('TX_PWR', q.power || activation.power || '');
+  r += field('MY_RIG', activation.rig);
+  r += field('MY_ANTENNA', activation.antenna);
   r += field('NAME', q.name);
   r += field('COMMENT', q.comment);
   // Champs de référence normalisés ADIF 3.1.4

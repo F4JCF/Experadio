@@ -42,6 +42,8 @@ const req2p = (req) => new Promise((resolve, reject) => {
 export const uid = () => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`);
 
 export const db = {
+  getKv: (key) => run('kv', 'readonly', (s) => req2p(s.get(key))),
+  setKv: (key, v) => run('kv', 'readwrite', (s) => { s.put(v, key); }),
   getSettings: () => run('kv', 'readonly', (s) => req2p(s.get('settings'))).then((v) => v || {}),
   saveSettings: (v) => run('kv', 'readwrite', (s) => { s.put(v, 'settings'); }),
 

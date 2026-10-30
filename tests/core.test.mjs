@@ -109,3 +109,10 @@ test('export SOTA CSV V2', () => {
   assert.equal(lines[0], 'V2,I1/F4JCF/P,I/PM-001,31/10/2026,0939,14.074MHz,Data,EA3XYZ,');
   assert.equal(lines[1], 'V2,I1/F4JCF/P,I/PM-001,31/10/2026,0942,14.285MHz,SSB,DL1AB,');
 });
+
+test('export du matériel utilisé', () => {
+  const act = { ...activation, rig: 'Yaesu FT-891', antenna: 'EFHW 40-10 m', power: '10' };
+  const txt = buildAdif([qsos[0], { ...qsos[1], power: '5' }], act, settings);
+  assert.match(txt, /<TX_PWR:2>10 <MY_RIG:12>Yaesu FT-891 <MY_ANTENNA:12>EFHW 40-10 m/);
+  assert.match(txt, /<TX_PWR:1>5 /);
+});

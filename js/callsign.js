@@ -37,12 +37,12 @@ export function lookupCall(call) {
   for (let i = part.length; i > 0; i--) {
     const ep = DXCC_PREFIXES[part.slice(0, i)];
     if (ep) {
-      const [own, iso, continent, dxcc, english] = DXCC_ENTITIES[ep];
+      const [own, iso, continent, dxcc, english, lat, lon] = DXCC_ENTITIES[ep];
       let name = own;
       if (!name) {
         try { name = (dnFr && iso) ? dnFr.of(iso) : english; } catch { name = english; }
       }
-      return { prefix: ep, name: name || english, iso, flag: flagEmoji(iso), continent, dxcc };
+      return { prefix: ep, name: name || english, iso, flag: flagEmoji(iso), continent, dxcc, lat, lon };
     }
   }
   return null;

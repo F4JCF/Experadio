@@ -4,6 +4,11 @@ import { lookupCall, normalizeCall, isPlausibleCall } from './callsign.js';
 import { bandFromFreq, bandLabel, MODES, parseFreq, isValidGrid, normalizeGrid, distanceBearing } from './radio.js';
 import { PROGRAMS, PROGRAM_KEYS, activePrograms, programStatus, findDupe, isValidRef, normalizeRef, parseTheirRefs } from './programs.js';
 import { exportFile, EXPORT_HELP, APP_VERSION } from './export.js';
+import { makeFetcher, nearbyPota, nearbySota, getPosition } from './nearby.js';
+import { latLonToGrid } from './radio.js';
+import { buildContactMap, mapToPng } from './map.js';
+
+const getJson = makeFetcher({ get: (k) => db.getKv(k), set: (k, v) => db.setKv(k, v) });
 
 const app = document.getElementById('app');
 let cleanup = null;
@@ -60,6 +65,23 @@ function download(file) {
 
 function canShareFiles() {
   try { return !!navigator.canShare && navigator.canShare({ files: [new File(['x'], 'x.txt', { type: 'text/plain' })] }); } catch { return false; }
+}
+
+function downloadBlob(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 3000);
+  toast(`Image enregistrée : ${name}`);
+}
+
+async function shareBlob(blob, name) {
+  const f = new File([blob], name, { type: blob.type });
+  try {
+    if (navigator.canShare?.({ files: [f] })) await navigator.share({ files: [f], title: name });
+    else downloadBlob(blob, name);
+  } catch (e) { if (e?.name !== 'AbortError') downloadBlob(blob, name); }
 }
 
 async function share(file) {
@@ -120,6 +142,14 @@ async function viewSettings() {
         <input name="myGrid" class="mono" autocomplete="off" spellcheck="false" placeholder="ex. JN33lp" value="${esc(settings.myGrid)}">
         <span class="hint">Sert pour la distance et l'azimut des correspondants. Modifiable pour chaque activation.</span>
       </label>
+      <h2 style="margin-top:8px">Mon matériel</h2>
+      <p class="small muted" style="margin:0">Un élément par ligne. Ils vous seront proposés à chaque activation.</p>
+      <label class="field">Postes (TX)
+        <textarea name="rigs" placeholder="Yaesu FT-891&#10;Yaesu FT-991A">${esc((settings.rigs || []).join('\n'))}</textarea>
+      </label>
+      <label class="field">Antennes
+        <textarea name="antennas" placeholder="EFHW 40-10 m&#10;Yagi 4 éléments 144 MHz">${esc((settings.antennas || []).join('\n'))}</textarea>
+      </label>
       <button class="btn primary" type="submit">Enregistrer</button>
     </form>
     <section class="card">
@@ -137,7 +167,8 @@ async function viewSettings() {
       <h2>À propos</h2>
       <p class="small muted" style="margin:0">Expé'Radio ${APP_VERSION} — logiciel libre sous licence GPL v3.<br>
       Identification des pays : Country Files d'AD1C (country-files.com). Drapeaux : Twemoji (CC-BY 4.0).<br>
-      Polices : Atkinson Hyperlegible et JetBrains Mono (SIL OFL).</p>
+      Polices : Atkinson Hyperlegible et JetBrains Mono (SIL OFL). Planisphère : Natural Earth (domaine public).<br>
+      Parcs et sommets : Parks on the Air, Summits on the Air.</p>
     </section>
   </div>`;
   $('#f').addEventListener('submit', async (e) => {
@@ -146,7 +177,8 @@ async function viewSettings() {
     const myCall = normalizeCall(fd.get('myCall'));
     const g = String(fd.get('myGrid') || '').trim();
     if (g && !isValidGrid(g)) { toast('Locator invalide (ex. JN33lp)'); return; }
-    settings = { ...settings, myCall, myGrid: normalizeGrid(g) };
+    const lines = (n) => [...new Set(String(fd.get(n) || '').split('\n').map((x) => x.trim()).filter(Boolean))];
+    settings = { ...settings, myCall, myGrid: normalizeGrid(g), rigs: lines('rigs'), antennas: lines('antennas') };
     await db.saveSettings(settings);
     location.hash = '#/';
     setTimeout(() => toast('Réglages enregistrés'), 50);
@@ -174,11 +206,23 @@ async function viewSettings() {
 async function viewActivationForm(id) {
   const a = id ? await db.getActivation(id) : null;
   if (id && !a) { location.hash = '#/'; return; }
-  const cur = a || { stationCall: settings.myCall || '', refs: {}, myGrid: settings.myGrid || '' };
+  const cur = a || { stationCall: settings.myCall || '', refs: {}, myGrid: settings.myGrid || '', ...(settings.lastGear || {}) };
   app.innerHTML = `
   <div class="page">
     <div class="topbar"><a class="icon-btn" href="${a ? `#/a/${esc(a.id)}` : '#/'}" aria-label="Retour">${ICON.back}</a>
       <h1 style="flex:1">${a ? 'Modifier l\'activation' : 'Nouvelle activation'}</h1></div>
+    <section class="card" aria-labelledby="nearTitle">
+      <h2 id="nearTitle">Autour de moi</h2>
+      <p class="small muted" style="margin:0">Trouve votre locator, puis les parcs POTA et les sommets SOTA proches. Une zone consultée chez vous avant de partir reste disponible sur le terrain, même sans réseau.</p>
+      <div class="row" style="align-items:flex-end">
+        <label class="field" style="flex:0 0 120px">Rayon
+          <select id="radius"><option value="10">10 km</option><option value="25" selected>25 km</option><option value="50">50 km</option><option value="100">100 km</option></select>
+        </label>
+        <button class="btn primary" type="button" id="locate" style="flex:1">Me localiser</button>
+      </div>
+      <p class="small" id="nearStatus" aria-live="polite" style="margin:0"></p>
+      <div id="nearResults" style="display:flex;flex-direction:column;gap:14px"></div>
+    </section>
     <form class="page" style="padding:0" id="f" novalidate>
       <section class="card">
         <label class="field">Indicatif utilisé sur l'air
@@ -206,14 +250,35 @@ async function viewActivationForm(id) {
         }).join('')}
       </section>
       <section class="card">
+        <h2>Matériel utilisé</h2>
+        <label class="field">Poste (TX)
+          <input name="rig" list="rigList" autocomplete="off" placeholder="ex. Yaesu FT-891" value="${esc(cur.rig)}">
+        </label>
+        <datalist id="rigList">${(settings.rigs || []).map((r) => `<option value="${esc(r)}"></option>`).join('')}</datalist>
+        <label class="field">Antenne
+          <input name="antenna" list="antList" autocomplete="off" placeholder="ex. EFHW 40-10 m" value="${esc(cur.antenna)}">
+        </label>
+        <datalist id="antList">${(settings.antennas || []).map((r) => `<option value="${esc(r)}"></option>`).join('')}</datalist>
+        <div class="grid2">
+          <label class="field">Puissance (W)
+            <input name="power" class="mono" inputmode="decimal" placeholder="ex. 10" value="${esc(cur.power)}">
+          </label>
+          <label class="field">Alimentation
+            <input name="supply" autocomplete="off" placeholder="ex. batterie 12 V" value="${esc(cur.supply)}">
+          </label>
+        </div>
+        <span class="small muted">Le poste, l'antenne et la puissance sont ajoutés aux exports ADIF (MY_RIG, MY_ANTENNA, TX_PWR).</span>
+      </section>
+      <section class="card">
         <label class="field">Notes (facultatif)
-          <textarea name="notes" placeholder="Matériel, conditions, accès…">${esc(cur.notes)}</textarea>
+          <textarea name="notes" placeholder="Conditions, accès, météo…">${esc(cur.notes)}</textarea>
         </label>
       </section>
       <p class="banner hidden" id="err" role="alert"></p>
       <button class="btn primary big" type="submit">${a ? 'Enregistrer' : 'Démarrer l\'activation'}</button>
     </form>
   </div>`;
+  setupNearby();
   $$('.prog').forEach((el) => {
     const cb = el.querySelector('input[type=checkbox]');
     const fieldEl = el.querySelector('.field');
@@ -230,6 +295,10 @@ async function viewActivationForm(id) {
     if (!isPlausibleCall(stationCall)) errors.push('L\'indicatif utilisé semble incorrect.');
     const g = String(fd.get('myGrid') || '').trim();
     if (g && !isValidGrid(g)) errors.push('Le locator est invalide (ex. JN34 ou JN34ab).');
+    const powerRaw = String(fd.get('power') || '').trim().replace(',', '.');
+    if (powerRaw && !(Number(powerRaw) > 0 && Number(powerRaw) <= 2000)) errors.push('La puissance doit être un nombre de watts, ex. 10.');
+    const gear = { rig: String(fd.get('rig') || '').trim(), antenna: String(fd.get('antenna') || '').trim(),
+      power: powerRaw ? String(Number(powerRaw)) : '', supply: String(fd.get('supply') || '').trim() };
     const refs = {};
     for (const k of PROGRAM_KEYS) {
       if (!fd.get(`on_${k}`)) continue;
@@ -246,9 +315,90 @@ async function viewActivationForm(id) {
       return;
     }
     const act = { ...(a || { id: uid(), createdAt: new Date().toISOString(), closed: false }),
-      stationCall, myGrid: normalizeGrid(g), refs, notes: String(fd.get('notes') || '').trim() };
+      stationCall, myGrid: normalizeGrid(g), refs, ...gear, notes: String(fd.get('notes') || '').trim() };
     await db.saveActivation(act);
+    // Le matériel de cette sortie sera proposé par défaut la prochaine fois
+    settings = { ...settings, lastGear: gear,
+      rigs: [...new Set([...(settings.rigs || []), gear.rig].filter(Boolean))],
+      antennas: [...new Set([...(settings.antennas || []), gear.antenna].filter(Boolean))] };
+    await db.saveSettings(settings);
     location.hash = `#/a/${act.id}`;
+  });
+}
+
+// ---------- Autour de moi ----------
+function nearItemHtml(it) {
+  const extra = it.program === 'SOTA'
+    ? [it.altM != null ? `${it.altM} m` : '', it.points != null ? `${it.points} pt${it.points > 1 ? 's' : ''}` : ''].filter(Boolean).join(' · ')
+    : '';
+  const act = it.activations === 0 ? '<span class="chip ok">Jamais activé</span>'
+    : `<span class="chip">${it.activations} activation${it.activations > 1 ? 's' : ''}</span>`;
+  return `
+    <div class="near-item">
+      <div style="display:flex;flex-direction:column;gap:4px;min-width:0">
+        <span><span class="refs">${esc(it.ref)}</span> <span class="small muted">${it.km < 1 ? '< 1' : Math.round(it.km)} km</span></span>
+        <span class="near-name">${esc(it.name)}</span>
+        <span class="row" style="gap:6px">${act}${extra ? `<span class="small muted">${esc(extra)}</span>` : ''}</span>
+      </div>
+      <button class="btn" type="button" data-pick="${esc(it.program)}" data-ref="${esc(it.ref)}" aria-label="Choisir ${esc(it.ref)} ${esc(it.name)}">Choisir</button>
+    </div>`;
+}
+
+function pickRef(program, ref) {
+  const box = document.querySelector(`.prog[data-k="${program}"]`);
+  if (!box) return;
+  const cb = box.querySelector('input[type=checkbox]');
+  cb.checked = true;
+  box.querySelector('.field').classList.remove('hidden');
+  box.querySelector('input[name^="ref_"]').value = ref;
+  $$(`[data-pick="${program}"]`).forEach((b) => {
+    const on = b.dataset.ref === ref;
+    b.textContent = on ? 'Choisi ✓' : 'Choisir';
+    b.classList.toggle('primary', on);
+    b.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+  toast(`${program} ${ref} ajouté à l'activation`);
+}
+
+function setupNearby() {
+  const status = $('#nearStatus');
+  const results = $('#nearResults');
+  results.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-pick]');
+    if (b) pickRef(b.dataset.pick, b.dataset.ref);
+  });
+  $('#locate').addEventListener('click', async () => {
+    const btn = $('#locate');
+    btn.disabled = true;
+    results.innerHTML = '';
+    status.className = 'small';
+    status.textContent = 'Recherche de votre position…';
+    try {
+      const pos = await getPosition();
+      const grid = latLonToGrid(pos.lat, pos.lon);
+      const gridInput = $('input[name=myGrid]');
+      if (gridInput) gridInput.value = grid;
+      const prec = pos.accuracy ? ` (précision ± ${Math.round(pos.accuracy)} m)` : '';
+      status.innerHTML = `Locator <b class="mono">${esc(grid)}</b>${esc(prec)} · recherche des références…`;
+      const radius = Number($('#radius').value);
+      const [pota, sota] = await Promise.allSettled([
+        nearbyPota(getJson, pos.lat, pos.lon, radius),
+        nearbySota(getJson, pos.lat, pos.lon, radius),
+      ]);
+      const block = (label, r) => {
+        if (r.status === 'rejected') return `<div class="banner">${label} : service injoignable. Vérifiez le réseau ; les zones déjà consultées restent disponibles hors ligne.</div>`;
+        if (!r.value.length) return `<p class="small muted" style="margin:0">${label} : aucune référence dans un rayon de ${radius} km.</p>`;
+        return `<div style="display:flex;flex-direction:column;gap:8px"><h3 class="near-h">${label} · ${r.value.length}</h3>${r.value.map(nearItemHtml).join('')}</div>`;
+      };
+      results.innerHTML = block('Parcs POTA', pota) + block('Sommets SOTA', sota)
+        + '<p class="small muted" style="margin:0">WWFF, IOTA et BOTA ne proposent pas encore de recherche par position : saisissez leur référence plus bas.</p>';
+      status.innerHTML = `Locator <b class="mono">${esc(grid)}</b>${esc(prec)} reporté dans le formulaire.`;
+    } catch (err) {
+      status.className = 'small banner';
+      status.textContent = err.message || 'Localisation impossible.';
+    } finally {
+      btn.disabled = false;
+    }
   });
 }
 
@@ -339,6 +489,7 @@ async function viewTerrain(id) {
                 <label class="field">Heure UTC<input name="time" class="mono" inputmode="numeric" placeholder="auto"></label>
               </div>
               <label class="field">Nom<input name="name" autocomplete="off"></label>
+              <label class="field">Puissance pour ce QSO (W)<input name="power" class="mono" inputmode="decimal" placeholder="${esc(a.power ? `${a.power} (activation)` : 'ex. 10')}"></label>
               <label class="field">Commentaire<input name="comment" autocomplete="off"></label>
             </div>
           </details>
@@ -419,6 +570,7 @@ async function viewTerrain(id) {
       rstSent: el('rstSent').value.trim(), rstRcvd: el('rstRcvd').value.trim(),
       theirRefs: el('theirRefs').value.trim().toUpperCase(), grid: normalizeGrid(g),
       name: el('name').value.trim(), comment: el('comment').value.trim(),
+      power: (Number(el('power').value.replace(',', '.')) > 0) ? String(Number(el('power').value.replace(',', '.'))) : '',
     };
     await db.saveQso(q);
     qsos = [q, ...qsos].sort((x, y) => (x.ts < y.ts ? 1 : -1));
@@ -426,6 +578,7 @@ async function viewTerrain(id) {
     await db.saveActivation(a);
     renderLog();
     ['call', 'theirRefs', 'grid', 'name', 'comment', 'time'].forEach((n) => { el(n).value = ''; });
+    // La puissance saisie reste pour les QSO suivants
     el('rstSent').value = MODES[q.mode].rst;
     el('rstRcvd').value = MODES[q.mode].rst;
     updateCallInfo();
@@ -462,6 +615,14 @@ async function viewTerrain(id) {
 }
 
 // ---------- Clôture ----------
+function gearHtml(a) {
+  const items = [['Poste', a.rig], ['Antenne', a.antenna], ['Puissance', a.power ? `${a.power} W` : ''], ['Alimentation', a.supply]].filter(([, v]) => v);
+  if (!items.length) return '';
+  return `<section class="card" aria-label="Matériel utilisé"><h2>Matériel utilisé</h2>
+    <div class="gear">${items.map(([k, v]) => `<span class="muted small">${k}</span><span>${esc(v)}</span>`).join('')}</div>
+    <a class="small" href="#/a/${esc(a.id)}/modifier">Modifier</a></section>`;
+}
+
 async function viewClose(id) {
   const a = await db.getActivation(id);
   if (!a) { location.hash = '#/'; return; }
@@ -484,7 +645,23 @@ async function viewClose(id) {
     <div class="topbar"><a class="icon-btn" href="#/" aria-label="Retour à l'accueil">${ICON.back}</a><h1 style="flex:1">Clôturer l'activation</h1></div>
     <p class="muted" style="margin:0"><span class="refs">${refsLine(a)}</span> · <span class="mono">${esc(a.stationCall)}</span> · ${qsos.length} QSO</p>
     ${statusHtml}
+    ${gearHtml(a)}
     ${qsos.length ? `
+    <section class="card" aria-labelledby="mapTitle">
+      <div class="row spread"><h2 id="mapTitle">Carte des contacts</h2>
+        <div class="row" role="group" aria-label="Cadrage de la carte">
+          <button class="btn" type="button" id="mapFit" aria-pressed="true">Ajustée</button>
+          <button class="btn" type="button" id="mapWorld" aria-pressed="false">Monde entier</button>
+        </div>
+      </div>
+      <div class="map" id="map"></div>
+      <div class="legend" id="legend"></div>
+      <p class="small muted" id="mapNote" style="margin:0"></p>
+      <div class="row">
+        <button class="btn" type="button" id="mapPng">Télécharger l'image</button>
+        ${sharing ? '<button class="btn" type="button" id="mapShare">Partager l\'image</button>' : ''}
+      </div>
+    </section>
     <section style="display:flex;flex-direction:column;gap:10px">
       <h2>Fichiers à envoyer</h2>
       ${files.map(({ k, file }, i) => `
@@ -506,6 +683,34 @@ async function viewClose(id) {
       <button class="btn danger" id="del">Supprimer cette activation</button>
     </section>
   </div>`;
+
+  if (qsos.length) {
+    let current = null;
+    const drawMap = (world) => {
+      current = buildContactMap(a, settings, qsos, { world });
+      $('#map').innerHTML = current.svg;
+      $('#legend').innerHTML = current.legend.map((l) => `<span class="legend-item"><span class="swatch" style="background:${l.color}"></span>${esc(l.label)} <span class="muted">(${l.count})</span></span>`).join('');
+      const notes = [];
+      if (!current.hasStation) notes.push('Indiquez le locator de l\'activation pour tracer les liaisons depuis votre station.');
+      if (current.approx) notes.push(`${current.approx} correspondant${current.approx > 1 ? 's' : ''} sans locator : la ligne en pointillés va vers le centre de son pays.`);
+      if (current.placed < current.total) notes.push(`${current.total - current.placed} correspondant${current.total - current.placed > 1 ? 's' : ''} non placé${current.total - current.placed > 1 ? 's' : ''} (pays inconnu).`);
+      $('#mapNote').textContent = notes.join(' ');
+      $('#mapFit').setAttribute('aria-pressed', String(!world));
+      $('#mapWorld').setAttribute('aria-pressed', String(world));
+      $('#mapFit').classList.toggle('primary', !world);
+      $('#mapWorld').classList.toggle('primary', world);
+    };
+    drawMap(false);
+    $('#mapFit').addEventListener('click', () => drawMap(false));
+    $('#mapWorld').addEventListener('click', () => drawMap(true));
+    const png = async () => {
+      const day = new Date(qsos[qsos.length - 1].ts).toISOString().slice(0, 10);
+      const blob = await mapToPng(current, `${a.stationCall} · ${refsLine(a).replace(/&[^;]+;/g, "'")}`, `${frDate(qsos[qsos.length - 1].ts)} · ${qsos.length} QSO`);
+      return { blob, name: `experadio-carte-${a.stationCall.replace(/\//g, '-')}-${day}.png` };
+    };
+    $('#mapPng').addEventListener('click', async () => { const { blob, name } = await png(); downloadBlob(blob, name); });
+    $('#mapShare')?.addEventListener('click', async () => { const { blob, name } = await png(); shareBlob(blob, name); });
+  }
 
   $$('[data-dl]').forEach((b) => b.addEventListener('click', () => download(files[Number(b.dataset.dl)].file)));
   $$('[data-sh]').forEach((b) => b.addEventListener('click', () => share(files[Number(b.dataset.sh)].file)));

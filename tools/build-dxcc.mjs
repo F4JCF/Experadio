@@ -24,7 +24,7 @@ const FR = { G: 'Angleterre', GM: 'Écosse', GW: 'Pays de Galles', IS: 'Sardaign
   'FT/x': 'Kerguelen', 'FT/w': 'Crozet', 'FT/z': 'Amsterdam et Saint-Paul', 'FT/g': 'Glorieuses', 'FT/j': 'Juan de Nova et Europa',
   'FT/t': 'Tromelin', 'FO/c': 'Clipperton', 'FO/m': 'Marquises', 'FO/a': 'Australes', 'FK/c': 'Chesterfield' };
 
-// e : préfixe d'entité -> [nom affiché ou '', code ISO, continent, code DXCC, nom anglais]
+// e : préfixe d'entité -> [nom affiché ou '', code ISO, continent, code DXCC, nom anglais, latitude, longitude]
 // nom affiché vide = utiliser le nom du pays en français fourni par le navigateur
 const raw = {};
 const isoCount = {};
@@ -32,13 +32,13 @@ for (const [key, ent] of Object.entries(cty.entities)) {
   if (key.startsWith('*')) continue; // entités WAE seulement
   const d = byCode.get(ent.dxccCode);
   const iso = ISO_FIX[key] || (d?.countryCode || '').toUpperCase();
-  raw[key] = { name: ent.name, iso, cont: ent.continent, code: ent.dxccCode };
+  raw[key] = { name: ent.name, iso, cont: ent.continent, code: ent.dxccCode, lat: ent.lat, lon: ent.lon };
   if (iso) isoCount[iso] = (isoCount[iso] || 0) + 1;
 }
 const e = {};
 for (const [key, r] of Object.entries(raw)) {
   const own = FR[key] ?? ((r.iso && (isoCount[r.iso] === 1 || MAIN.has(key))) ? '' : r.name);
-  e[key] = [own, r.iso, r.cont, r.code, r.name];
+  e[key] = [own, r.iso, r.cont, r.code, r.name, r.lat, r.lon];
 }
 // p : préfixe -> préfixe d'entité
 const p = {};

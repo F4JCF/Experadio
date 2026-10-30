@@ -1,9 +1,9 @@
 // Service worker : met l'application en cache pour qu'elle fonctionne sans réseau.
 // Changer VERSION à chaque publication pour que les appareils récupèrent la mise à jour.
-const VERSION = 'experadio-0.1.0';
+const VERSION = 'experadio-0.2.0';
 const FILES = [
   './', 'index.html', 'manifest.webmanifest', 'css/app.css',
-  'js/app.js', 'js/db.js', 'js/callsign.js', 'js/dxcc-data.js', 'js/radio.js', 'js/programs.js', 'js/export.js',
+  'js/app.js', 'js/db.js', 'js/callsign.js', 'js/dxcc-data.js', 'js/radio.js', 'js/programs.js', 'js/export.js', 'js/nearby.js', 'js/map.js', 'js/world-data.js',
   'fonts/TwemojiCountryFlags.woff2',
   'fonts/atkinson-hyperlegible-latin-400-normal.woff2', 'fonts/atkinson-hyperlegible-latin-700-normal.woff2',
   'fonts/jetbrains-mono-latin-500-normal.woff2', 'fonts/jetbrains-mono-latin-700-normal.woff2',
