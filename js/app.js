@@ -7,6 +7,11 @@ import { exportFile, EXPORT_HELP, APP_VERSION } from './export.js';
 import { makeFetcher, nearbyPota, nearbySota, getPosition } from './nearby.js';
 import { latLonToGrid } from './radio.js';
 import { buildContactMap, mapToPng } from './map.js';
+import { makeLookup, SERVICES, DEFAULT_ORDER, configuredServices } from './lookup.js';
+
+const kvStore = { get: (k) => db.getKv(k), set: (k, v) => db.setKv(k, v) };
+const getAccounts = () => db.getKv('accounts').then((v) => v || {});
+const lookupSvc = makeLookup({ store: kvStore, getAccounts });
 
 const getJson = makeFetcher({ get: (k) => db.getKv(k), set: (k, v) => db.setKv(k, v) });
 
@@ -159,9 +164,12 @@ async function viewSettings() {
       <label class="btn" for="restore">Restaurer une sauvegarde</label>
       <input type="file" id="restore" accept=".json,application/json" class="sr">
     </section>
-    <section class="card">
-      <h2>Comptes de recherche d'indicatifs</h2>
-      <p class="small muted" style="margin:0">La recherche automatique du nom et du locator via QRZ.com, HamQTH et QRZCQ arrive dans la prochaine version. En attendant, le pays et le drapeau sont trouvés hors ligne, et le locator se saisit à la main.</p>
+    <section class="card" id="accounts" aria-labelledby="accTitle">
+      <h2 id="accTitle">Comptes de recherche d'indicatifs</h2>
+      <p class="small muted" style="margin:0">Pendant la saisie, le nom, la ville et le locator du correspondant sont cherchés dans ces services, dans l'ordre ci-dessous : le premier qui trouve l'indicatif l'emporte. Les fiches trouvées restent sur l'appareil pour le terrain sans réseau.<br>Vos identifiants ne sont enregistrés que sur cet appareil et ne figurent pas dans les sauvegardes.</p>
+      <div id="accList" style="display:flex;flex-direction:column;gap:12px"></div>
+      <button class="btn primary" type="button" id="accSave">Enregistrer les comptes</button>
+      <div class="row spread"><span class="small muted" id="cacheInfo"></span><button class="btn" type="button" id="cacheClear">Vider les fiches gardées</button></div>
     </section>
     <section class="card">
       <h2>À propos</h2>
@@ -183,6 +191,7 @@ async function viewSettings() {
     location.hash = '#/';
     setTimeout(() => toast('Réglages enregistrés'), 50);
   });
+  setupAccounts();
   $('#backup').addEventListener('click', async () => {
     const data = await db.backup();
     const d = new Date();
@@ -199,6 +208,113 @@ async function viewSettings() {
       toast(err.message || 'Fichier illisible');
     }
     e.target.value = '';
+  });
+}
+
+// ---------- Comptes de recherche ----------
+async function setupAccounts() {
+  const saved = await getAccounts();
+  const state = { order: (saved.order?.length ? saved.order : DEFAULT_ORDER).filter((k) => SERVICES[k]) };
+  for (const k of DEFAULT_ORDER) { if (!state.order.includes(k)) state.order.push(k); state[k] = { user: saved[k]?.user || '', pass: saved[k]?.pass || '' }; }
+  const list = $('#accList');
+
+  const readInputs = () => {
+    for (const k of state.order) {
+      const box = list.querySelector(`[data-s="${k}"]`);
+      if (box) state[k] = { user: box.querySelector('[name=user]').value.trim(), pass: box.querySelector('[name=pass]').value };
+    }
+  };
+  const render = () => {
+    list.innerHTML = state.order.map((k, i) => {
+      const on = state[k].user && state[k].pass;
+      return `
+      <div class="acc" data-s="${k}">
+        <div class="row spread">
+          <b>${i + 1}. ${esc(SERVICES[k].label)}</b>
+          <div class="row" style="gap:4px">
+            <span class="chip ${on ? 'ok' : ''}">${on ? 'Configuré' : 'Non configuré'}</span>
+            <button class="icon-btn" type="button" data-up="${k}" aria-label="Monter ${esc(SERVICES[k].label)}" ${i === 0 ? 'disabled' : ''}>↑</button>
+            <button class="icon-btn" type="button" data-down="${k}" aria-label="Descendre ${esc(SERVICES[k].label)}" ${i === state.order.length - 1 ? 'disabled' : ''}>↓</button>
+          </div>
+        </div>
+        <div class="grid2">
+          <label class="field">Identifiant<input name="user" class="mono" autocomplete="off" autocapitalize="characters" spellcheck="false" value="${esc(state[k].user)}"></label>
+          <label class="field">Mot de passe<input name="pass" type="password" autocomplete="new-password" value="${esc(state[k].pass)}"></label>
+        </div>
+        <span class="small muted">${esc(SERVICES[k].note)}</span>
+        <div class="row"><button class="btn" type="button" data-test="${k}">Tester la connexion</button><button class="btn ghost" type="button" data-clear="${k}">Effacer</button></div>
+        <p class="small" data-status="${k}" aria-live="polite" style="margin:0"></p>
+      </div>`;
+    }).join('');
+  };
+  const persist = async () => {
+    readInputs();
+    const out = { order: state.order };
+    for (const k of state.order) if (state[k].user || state[k].pass) out[k] = state[k];
+    await db.setKv('accounts', out);
+  };
+  const refreshCache = async () => {
+    const n = await db.countKv('call:').catch(() => 0);
+    $('#cacheInfo').textContent = n ? `${n} fiche${n > 1 ? 's' : ''} d'indicatif gardée${n > 1 ? 's' : ''} pour le terrain.` : 'Aucune fiche gardée pour l\'instant.';
+  };
+
+  render();
+  refreshCache();
+  list.addEventListener('click', async (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    const move = b.dataset.up || b.dataset.down;
+    if (move) {
+      readInputs();
+      const i = state.order.indexOf(move), j = b.dataset.up ? i - 1 : i + 1;
+      [state.order[i], state.order[j]] = [state.order[j], state.order[i]];
+      render();
+      list.querySelector(`[data-${b.dataset.up ? 'up' : 'down'}="${move}"]`)?.focus();
+      return;
+    }
+    if (b.dataset.clear) {
+      const box = list.querySelector(`[data-s="${b.dataset.clear}"]`);
+      box.querySelector('[name=user]').value = ''; box.querySelector('[name=pass]').value = '';
+      await persist(); render(); toast(`${SERVICES[b.dataset.clear].label} effacé`);
+      return;
+    }
+    if (b.dataset.test) {
+      const k = b.dataset.test;
+      readInputs();
+      const st = list.querySelector(`[data-status="${k}"]`);
+      if (!state[k].user || !state[k].pass) { st.textContent = 'Indiquez l\'identifiant et le mot de passe.'; return; }
+      b.disabled = true;
+      st.className = 'small'; st.textContent = 'Connexion en cours…';
+      try {
+        const probe = settings.myCall || state[k].user;
+        const { info, result } = await lookupSvc.test(k, state[k], probe);
+        st.className = 'small ok-text';
+        st.textContent = `Connexion réussie${info ? ` (${info})` : ''} : ${result.call}${result.name ? ` — ${result.name}` : ''}${result.grid ? ` · ${result.grid}` : ' · locator non fourni'}.`;
+        await persist();
+        render();
+        list.querySelector(`[data-status="${k}"]`).className = 'small ok-text';
+        list.querySelector(`[data-status="${k}"]`).textContent = st.textContent;
+      } catch (err) {
+        st.className = 'small warn-text';
+        st.textContent = err.kind === 'auth' ? `Identifiants refusés : ${err.message}`
+          : err.kind === 'network' ? 'Service injoignable. Vérifiez le réseau ; si le problème persiste, ce service n\'accepte peut-être pas les connexions depuis un navigateur.'
+          : err.kind === 'notfound' ? 'Connexion réussie, mais votre indicatif n\'a pas été trouvé dans ce service.'
+          : `Erreur : ${err.message}`;
+        if (err.kind === 'notfound') await persist();
+      } finally { b.disabled = false; }
+    }
+  });
+  $('#accSave').addEventListener('click', async () => {
+    await persist();
+    render();
+    const n = configuredServices(await getAccounts()).length;
+    toast(n ? `${n} compte${n > 1 ? 's' : ''} enregistré${n > 1 ? 's' : ''}` : 'Aucun compte configuré');
+  });
+  $('#cacheClear').addEventListener('click', async () => {
+    if (!confirm('Effacer les fiches d\'indicatifs gardées sur cet appareil ?')) return;
+    await db.clearKv('call:');
+    refreshCache();
+    toast('Fiches effacées');
   });
 }
 
@@ -474,6 +590,7 @@ async function viewTerrain(id) {
             <input name="call" autocapitalize="characters" spellcheck="false" enterkeyhint="done" aria-describedby="callinfo">
           </label>
           <div class="callinfo" id="callinfo" aria-live="polite"></div>
+          <div class="lookupinfo small" id="lookupinfo" aria-live="polite"></div>
           <div class="grid2">
             <label class="field">Report envoyé<input name="rstSent" class="mono" inputmode="text" value="${MODES[mode].rst}"></label>
             <label class="field">Report reçu<input name="rstRcvd" class="mono" inputmode="text" value="${MODES[mode].rst}"></label>
@@ -536,11 +653,51 @@ async function viewTerrain(id) {
     box.innerHTML = parts.join('');
   };
 
+  // Recherche du correspondant (QRZ.com, HamQTH, QRZCQ ou fiches gardées)
+  let found = null;
+  let lookupTimer = null;
+  let lookupSeq = 0;
+  const hasAccounts = configuredServices(await getAccounts()).length > 0;
+  const autoFill = (name, value) => {
+    const input = el(name);
+    if (value && (!input.value.trim() || input.dataset.auto === '1')) { input.value = value; input.dataset.auto = '1'; }
+  };
+  const showLookup = (r, pending) => {
+    const box = $('#lookupinfo');
+    if (pending) { box.innerHTML = '<span class="muted">Recherche du correspondant…</span>'; return; }
+    if (!r) { box.innerHTML = ''; return; }
+    const bits = [r.name && `<b>${esc(r.name)}</b>`, r.qth && esc(r.qth), r.grid && `<span class="mono">${esc(r.grid)}</span>`].filter(Boolean);
+    box.innerHTML = `${bits.join(' · ') || 'Fiche trouvée'} <span class="muted">· ${esc(r.source)}${r.cached ? ', gardée' : ''}</span>`;
+  };
+  const runLookup = () => {
+    clearTimeout(lookupTimer);
+    const call = normalizeCall(el('call').value);
+    found = null;
+    if (!isPlausibleCall(call)) { showLookup(null); return; }
+    const seq = ++lookupSeq;
+    lookupTimer = setTimeout(async () => {
+      const cachedHit = await lookupSvc.cached(call);
+      if (!cachedHit && !(hasAccounts && navigator.onLine)) { if (seq === lookupSeq) showLookup(null); return; }
+      if (!cachedHit) showLookup(null, true);
+      const r = cachedHit || await lookupSvc.lookup(call);
+      if (seq !== lookupSeq || normalizeCall(el('call').value) !== call) return;
+      found = r;
+      showLookup(r);
+      if (r) { autoFill('grid', r.grid); autoFill('name', r.name); updateCallInfo(); }
+    }, 450);
+  };
+  ['grid', 'name'].forEach((n) => el(n).addEventListener('input', () => { el(n).dataset.auto = ''; }));
+
   renderLog();
   updateBand();
 
   el('freq').addEventListener('input', () => { updateBand(); updateCallInfo(); });
-  el('call').addEventListener('input', updateCallInfo);
+  el('call').addEventListener('input', () => {
+    // Nouvel indicatif : on retire ce qui avait été rempli automatiquement pour le précédent
+    ['grid', 'name'].forEach((n) => { if (el(n).dataset.auto === '1') { el(n).value = ''; el(n).dataset.auto = ''; } });
+    updateCallInfo();
+    runLookup();
+  });
   el('grid').addEventListener('input', updateCallInfo);
   el('mode').addEventListener('change', () => {
     const def = MODES[el('mode').value].rst;
@@ -571,13 +728,15 @@ async function viewTerrain(id) {
       theirRefs: el('theirRefs').value.trim().toUpperCase(), grid: normalizeGrid(g),
       name: el('name').value.trim(), comment: el('comment').value.trim(),
       power: (Number(el('power').value.replace(',', '.')) > 0) ? String(Number(el('power').value.replace(',', '.'))) : '',
+      qth: found && lookupSvc.baseForSearch(found.call) === lookupSvc.baseForSearch(call) ? found.qth : '',
     };
     await db.saveQso(q);
     qsos = [q, ...qsos].sort((x, y) => (x.ts < y.ts ? 1 : -1));
     a.last = { freq: el('freq').value.trim(), mode: q.mode };
     await db.saveActivation(a);
     renderLog();
-    ['call', 'theirRefs', 'grid', 'name', 'comment', 'time'].forEach((n) => { el(n).value = ''; });
+    ['call', 'theirRefs', 'grid', 'name', 'comment', 'time'].forEach((n) => { el(n).value = ''; el(n).dataset.auto = ''; });
+    clearTimeout(lookupTimer); lookupSeq++; found = null; showLookup(null);
     // La puissance saisie reste pour les QSO suivants
     el('rstSent').value = MODES[q.mode].rst;
     el('rstRcvd').value = MODES[q.mode].rst;

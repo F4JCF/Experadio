@@ -153,6 +153,14 @@ details.more > summary { cursor: pointer; min-height: 44px; display: flex; align
 .export { display: flex; flex-direction: column; gap: 8px; padding: 14px 16px; border-radius: 12px; background: var(--surface); border: 1px solid var(--line); }
 .export .fname { font-family: var(--mono); font-size: 13px; word-break: break-all; color: var(--text-2); }
 
+/* Comptes de recherche */
+.acc { display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 12px; background: var(--bg); border: 1px solid var(--line); }
+.acc .icon-btn { width: 44px; height: 44px; font-size: 20px; }
+.acc .icon-btn:disabled { opacity: .35; cursor: default; }
+.ok-text { color: var(--ok); }
+.warn-text { color: var(--warn); }
+.lookupinfo { min-height: 20px; color: var(--text-2); }
+
 /* Carte des contacts */
 .map { border-radius: 12px; overflow: hidden; border: 1px solid var(--line); background: #0E1A24; aspect-ratio: 2 / 1; }
 .map svg { display: block; width: 100%; height: 100%; }

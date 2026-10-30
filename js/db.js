@@ -44,6 +44,9 @@ export const uid = () => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now(
 export const db = {
   getKv: (key) => run('kv', 'readonly', (s) => req2p(s.get(key))),
   setKv: (key, v) => run('kv', 'readwrite', (s) => { s.put(v, key); }),
+  // Nombre d'entrées et effacement par préfixe (ex. fiches d'indicatifs « call: »)
+  countKv: (prefix) => run('kv', 'readonly', (s) => req2p(s.getAllKeys(IDBKeyRange.bound(prefix, `${prefix}\uffff`)))).then((k) => k.length),
+  clearKv: (prefix) => run('kv', 'readwrite', (s) => { s.delete(IDBKeyRange.bound(prefix, `${prefix}\uffff`)); }),
   getSettings: () => run('kv', 'readonly', (s) => req2p(s.get('settings'))).then((v) => v || {}),
   saveSettings: (v) => run('kv', 'readwrite', (s) => { s.put(v, 'settings'); }),
 

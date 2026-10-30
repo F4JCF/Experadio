@@ -24,6 +24,12 @@ Auteur : F4JCF — Licence GPL v3.
 
 Votre position GPS reste sur l'appareil : elle sert à calculer le locator et les distances. L'application télécharge les listes de parcs (api.pota.app) et de sommets (api2.sota.org.uk) de votre région, puis les garde en mémoire. Une zone consultée chez vous avant de partir reste donc disponible sur le terrain, même sans réseau.
 
+### Recherche des indicatifs
+
+Dans **Réglages › Comptes de recherche d'indicatifs**, renseignez vos comptes QRZ.com, HamQTH et/ou QRZCQ, testez-les et choisissez leur ordre. Pendant la saisie, le nom, la ville et le locator du correspondant s'affichent et se remplissent tout seuls. Les fiches trouvées sont gardées sur l'appareil : un correspondant déjà cherché est retrouvé même sans réseau.
+
+Vos identifiants restent sur l'appareil et ne figurent pas dans les sauvegardes. HamQTH est gratuit ; la recherche détaillée QRZ.com demande en général un abonnement XML, et QRZCQ peut demander un compte Premium.
+
 ### Installer sur l'appareil
 
 - **Android (Chrome)** : menu ⋮ puis « Ajouter à l'écran d'accueil » ou « Installer l'application ».
@@ -51,7 +57,7 @@ Les QSO identiques (même indicatif, même bande, même mode, même journée UTC
 
 - [x] v0.1 — activations multi-programmes, saisie hors ligne, pays et drapeau, doublons, exports, sauvegarde
 - [x] v0.2 — localisation (locator GPS, parcs POTA et sommets SOTA proches), matériel utilisé (MY_RIG, MY_ANTENNA, TX_PWR), carte des contacts par bande
-- [ ] Recherche d'indicatifs (QRZ.com, HamQTH, QRZCQ) avec cache pour le terrain
+- [x] v0.3 — recherche d'indicatifs (QRZ.com, HamQTH, QRZCQ) dans l'ordre choisi, nom, ville et locator remplis automatiquement, fiches gardées pour le terrain
 - [ ] Réserves WWFF autour de soi
 - [ ] Propagation du jour et checklist de matériel
 - [ ] Pilotage CAT du poste depuis le PC (fréquence et mode automatiques)
